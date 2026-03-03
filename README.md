@@ -2,6 +2,12 @@
 
 Anticheat client for **Deadlock**: logs tasks, screenshots (game window), key input (only when Deadlock is focused), and hardware info, then **uploads the session to your Discord** when the player presses **F12** to end the session.
 
+## Requirements
+
+- **Windows** 10/11 (x64)
+- **Visual Studio 2022** (or 2019) with C++ desktop workload and **Windows 10/11 SDK**
+- Build for **x64** (Debug or Release); the project is configured for x64
+
 ## How it works
 
 - **Run** the .exe next to the game (or on the same PC). It creates a timestamped folder and writes:
@@ -15,7 +21,7 @@ No manual file upload: everything is sent automatically to **your** Discord.
 
 ## Setup (so uploads go “here” — your Discord)
 
-1. **Build** the project (Visual Studio; open `UrnItAnticheat-main\UrnItAnticheat\UrnItAnticheat.sln`).
+1. **Clone** the repo and open `UrnItAnticheat-main\UrnItAnticheat\UrnItAnticheat.sln` in Visual Studio. Select **x64** (Debug or Release) and build. The `.exe` is in `UrnItAnticheat-main\UrnItAnticheat\x64\Debug\` or `...\x64\Release\`.
 2. **Discord webhook** (required for upload):
    - In Discord: Channel → Integrations → Webhooks → New Webhook. Copy the webhook URL.
    - Next to the built `.exe`, create `webhook.txt` with **one line**: that URL.
