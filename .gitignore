@@ -1,0 +1,12 @@
+# Do not commit webhook URL or player IDs
+webhook.txt
+player_id.txt
+**/webhook.txt
+**/player_id.txt
+
+# Build outputs
+*.user
+.vs/
+x64/
+[Dd]ebug/
+[Rr]elease/
