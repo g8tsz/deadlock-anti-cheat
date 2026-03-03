@@ -1,6 +1,8 @@
-# UrnIt Anticheat – Roadmap
+# Roadmap
 
-**Canonical roadmap:** [Wiki → Roadmap](https://github.com/lorddummy/deadlock-anti-cheat/wiki). This file is a copy for the repo.
+**Deadlock AC (UrnIt Anticheat)** – current state, known issues, and next steps. For setup and usage see the [main README](https://github.com/lorddummy/deadlock-anti-cheat/blob/main/README.md).
+
+---
 
 ## Current state
 
@@ -24,7 +26,7 @@
 
 ---
 
-## Roadmap / next steps
+## Next steps
 
 - **Config** – Intervals and options load from `config.txt` next to exe; no recompile needed.
 - **Macro hint** – Report includes "Possible macro/bot" when key interval variance is very low (configurable threshold).

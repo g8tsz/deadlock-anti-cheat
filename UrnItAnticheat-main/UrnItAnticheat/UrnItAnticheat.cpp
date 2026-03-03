@@ -5,6 +5,8 @@
 #include <Lmcons.h>
 #include <wtsapi32.h>
 #include <winhttp.h>
+#include <wincodec.h>
+#include <dxgi.h>
 
 #include <iostream>
 #include <vector>
@@ -21,21 +23,64 @@
 
 #pragma comment(lib, "Wtsapi32.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "dxgi.lib")
 
-// Tunable constants (single place to adjust intervals and limits)
+// Tunable constants; load from config.txt next to exe if present, else these defaults.
 namespace Config {
-  const float TASK_SCAN_INTERVAL_SEC    = 3.f;
-  const float SCREENSHOT_INTERVAL_SEC  = 5.f;
-  const float CPU_LOG_INTERVAL_SEC     = 0.5f;
-  const float KEYLOG_INTERVAL_SEC      = 0.05f;
-  const DWORD LOOP_SLEEP_MS            = 20;
-  const size_t WEBHOOK_BATCH_SIZE      = 10;
-  const DWORD WEBHOOK_RATE_LIMIT_MS    = 500;
-  const DWORD UPLOAD_TIMEOUT_MS        = 30000;
-  const size_t MAX_UPLOAD_FILE_BYTES   = 25u * 1024 * 1024;
-  const size_t MAX_SCREENSHOT_UPLOAD_BYTES = 8u * 1024 * 1024;  // skip huge BMPs in upload (still on disk)
-  const bool   AUTO_UPLOAD_ON_GAME_EXIT = true;  // when true, session ends and uploads automatically when Deadlock process exits; F12 still works as manual end
-  const unsigned UPLOAD_WAIT_TIMEOUT_SEC = 30;  // max seconds to wait for Discord upload before exiting (upload runs in background)
+  float TASK_SCAN_INTERVAL_SEC    = 3.f;
+  float SCREENSHOT_INTERVAL_SEC  = 5.f;
+  float CPU_LOG_INTERVAL_SEC     = 0.5f;
+  float KEYLOG_INTERVAL_SEC      = 0.05f;
+  DWORD LOOP_SLEEP_MS            = 20;
+  size_t WEBHOOK_BATCH_SIZE      = 10;
+  DWORD WEBHOOK_RATE_LIMIT_MS    = 500;
+  DWORD UPLOAD_TIMEOUT_MS        = 30000;
+  size_t MAX_UPLOAD_FILE_BYTES   = 25u * 1024 * 1024;
+  size_t MAX_SCREENSHOT_UPLOAD_BYTES = 8u * 1024 * 1024;
+  bool   AUTO_UPLOAD_ON_GAME_EXIT = true;
+  unsigned UPLOAD_WAIT_TIMEOUT_SEC = 30;
+  bool   CLEANUP_AFTER_UPLOAD    = false;
+  float  MACRO_VARIANCE_THRESHOLD_MS2 = 500.f;  // below this variance of inter-key intervals (ms^2), report "possible macro"
+}
+
+static void LoadConfig(const std::string& exe_dir) {
+  std::ifstream f(exe_dir + "\\config.txt");
+  if (!f) return;
+  std::string line, key, val;
+  while (std::getline(f, line)) {
+    size_t eq = line.find('=');
+    if (eq == std::string::npos) continue;
+    key = line.substr(0, eq);
+    val = line.substr(eq + 1);
+    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+    while (!val.empty() && (val.back() == ' ' || val.back() == '\r' || val.back() == '\n')) val.pop_back();
+    if (key == "TASK_SCAN_INTERVAL_SEC") Config::TASK_SCAN_INTERVAL_SEC = (float)atof(val.c_str());
+    else if (key == "SCREENSHOT_INTERVAL_SEC") Config::SCREENSHOT_INTERVAL_SEC = (float)atof(val.c_str());
+    else if (key == "CPU_LOG_INTERVAL_SEC") Config::CPU_LOG_INTERVAL_SEC = (float)atof(val.c_str());
+    else if (key == "KEYLOG_INTERVAL_SEC") Config::KEYLOG_INTERVAL_SEC = (float)atof(val.c_str());
+    else if (key == "LOOP_SLEEP_MS") Config::LOOP_SLEEP_MS = (DWORD)atoi(val.c_str());
+    else if (key == "AUTO_UPLOAD_ON_GAME_EXIT") Config::AUTO_UPLOAD_ON_GAME_EXIT = (val == "1" || val == "true" || val == "yes");
+    else if (key == "UPLOAD_WAIT_TIMEOUT_SEC") Config::UPLOAD_WAIT_TIMEOUT_SEC = (unsigned)atoi(val.c_str());
+    else if (key == "CLEANUP_AFTER_UPLOAD") Config::CLEANUP_AFTER_UPLOAD = (val == "1" || val == "true" || val == "yes");
+    else if (key == "MACRO_VARIANCE_THRESHOLD_MS2") Config::MACRO_VARIANCE_THRESHOLD_MS2 = (float)atof(val.c_str());
+  }
+}
+
+static bool LoadCheatList(const std::string& exe_dir, std::vector<std::string>& out) {
+  std::ifstream f(exe_dir + "\\cheat_list.txt");
+  if (!f) return false;
+  out.clear();
+  std::string line;
+  while (std::getline(f, line)) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+    size_t i = 0; while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+    if (i >= line.size() || line[i] == '#') continue;
+    line = line.substr(i);
+    for (auto& c : line) c = (char)tolower((unsigned char)c);
+    out.push_back(line);
+  }
+  return out.size() >= 2;  // at least "cheats" and "performance"
 }
 
 // Format: category name ("cheats" or "performance") then one or more process names (e.g. "cheat.exe").
@@ -202,8 +247,12 @@ static bool SendWebhookBatch(const std::string& webhook_url, const std::string& 
   AppendMultipartField(body, boundary, "payload_json", payload_json.data(), payload_json.size());
   for (size_t i = 0; i < files.size(); i++) {
     std::string name = "file" + std::to_string(i + 1);
-    const char* ct = (files[i].filename.size() >= 4 && files[i].filename.compare(files[i].filename.size() - 4, 4, ".bmp") == 0)
-      ? "image/bmp" : "application/octet-stream";
+    const char* ct = "application/octet-stream";
+    if (files[i].filename.size() >= 4) {
+      size_t pos = files[i].filename.size() - 4;
+      if (files[i].filename.compare(pos, 4, ".png") == 0) ct = "image/png";
+      else if (files[i].filename.compare(pos, 4, ".bmp") == 0) ct = "image/bmp";
+    }
     AppendMultipartFile(body, boundary, name.c_str(), files[i].filename, files[i].data.data(), files[i].data.size(), ct);
   }
   {
@@ -247,6 +296,67 @@ static std::string ReadPlayerId(const std::string& exe_dir) {
   return line;
 }
 
+// Save 24-bit BGR DIB (bottom-up) as PNG via WIC. Reduces size vs BMP for faster upload.
+static bool SaveDibAsPng(UINT width, UINT height, UINT stride_src, const BYTE* bgr_data, const std::string& filepath) {
+  static bool co_init = false;
+  if (!co_init) {
+    if (FAILED(CoInitializeEx(NULL, COINIT_MULTITHREADED))) return false;
+    co_init = true;
+  }
+  IWICImagingFactory* factory = NULL;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) return false;
+  IWICBitmap* bitmap = NULL;
+  HRESULT hr = factory->CreateBitmap(width, height, GUID_WICPixelFormat24bppBGR, WICBitmapCacheOnLoad, &bitmap);
+  if (FAILED(hr)) { factory->Release(); return false; }
+  WICRect rect = { 0, 0, (INT)width, (INT)height };
+  IWICBitmapLock* lock = NULL;
+  hr = bitmap->Lock(&rect, WICBitmapLockWrite, &lock);
+  if (FAILED(hr)) { bitmap->Release(); factory->Release(); return false; }
+  UINT stride_dst = 0;
+  BYTE* dst = NULL;
+  UINT buf_size = 0;
+  hr = lock->GetStride(&stride_dst);
+  if (SUCCEEDED(hr)) hr = lock->GetDataPointer(&buf_size, &dst);
+  lock->Release();
+  if (FAILED(hr) || !dst) { bitmap->Release(); factory->Release(); return false; }
+  for (UINT y = 0; y < height; y++) {
+    const BYTE* src_row = bgr_data + (height - 1 - y) * stride_src;
+    memcpy(dst + y * stride_dst, src_row, (size_t)width * 3);
+  }
+  std::wstring wpath;
+  int n = MultiByteToWideChar(CP_ACP, 0, filepath.c_str(), (int)filepath.size(), NULL, 0);
+  if (n <= 0) { bitmap->Release(); factory->Release(); return false; }
+  wpath.resize(n);
+  MultiByteToWideChar(CP_ACP, 0, filepath.c_str(), (int)filepath.size(), &wpath[0], n);
+  IWICStream* stream = NULL;
+  hr = factory->CreateStream(&stream);
+  if (FAILED(hr)) { bitmap->Release(); factory->Release(); return false; }
+  hr = stream->InitializeFromFilename(wpath.c_str(), GENERIC_WRITE);
+  if (FAILED(hr)) { stream->Release(); bitmap->Release(); factory->Release(); return false; }
+  IWICBitmapEncoder* encoder = NULL;
+  hr = factory->CreateEncoder(GUID_ContainerFormatPng, NULL, &encoder);
+  if (FAILED(hr)) { stream->Release(); bitmap->Release(); factory->Release(); return false; }
+  hr = encoder->Initialize(stream, WICBitmapEncoderNoCache);
+  if (FAILED(hr)) { encoder->Release(); stream->Release(); bitmap->Release(); factory->Release(); return false; }
+  IWICBitmapFrameEncode* frame = NULL;
+  IPropertyBag2* props = NULL;
+  hr = encoder->CreateNewFrame(&frame, &props);
+  if (FAILED(hr)) { encoder->Release(); stream->Release(); bitmap->Release(); factory->Release(); return false; }
+  if (props) props->Release();
+  hr = frame->Initialize(NULL);
+  if (FAILED(hr)) { frame->Release(); encoder->Release(); stream->Release(); bitmap->Release(); factory->Release(); return false; }
+  hr = frame->SetSize(width, height);
+  if (SUCCEEDED(hr)) hr = frame->WriteSource(bitmap, NULL);
+  if (SUCCEEDED(hr)) hr = frame->Commit();
+  frame->Release();
+  if (SUCCEEDED(hr)) hr = encoder->Commit();
+  encoder->Release();
+  stream->Release();
+  bitmap->Release();
+  factory->Release();
+  return SUCCEEDED(hr);
+}
+
 // Returns true if all batches uploaded successfully. Sends a final status message to Discord.
 static bool UploadSessionToDiscord(const std::string& exe_dir, const std::string& session_dir) {
   std::string webhook_url;
@@ -260,19 +370,21 @@ static bool UploadSessionToDiscord(const std::string& exe_dir, const std::string
     if (ReadFileToVector(session_dir + n, fp.data)) all.push_back(std::move(fp));
   }
   WIN32_FIND_DATAA fd;
-  HANDLE h = FindFirstFileA((session_dir + "*.bmp").c_str(), &fd);
-  if (h != INVALID_HANDLE_VALUE) {
-    do {
-      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        FilePart fp;
-        fp.filename = fd.cFileName;
-        if (ReadFileToVector(session_dir + fd.cFileName, fp.data)) {
-          if (fp.data.size() <= Config::MAX_SCREENSHOT_UPLOAD_BYTES)
-            all.push_back(std::move(fp));
+  for (const char* ext : { "*.png", "*.bmp" }) {
+    HANDLE h = FindFirstFileA((session_dir + ext).c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+      do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+          FilePart fp;
+          fp.filename = fd.cFileName;
+          if (ReadFileToVector(session_dir + fd.cFileName, fp.data)) {
+            if (fp.data.size() <= Config::MAX_SCREENSHOT_UPLOAD_BYTES)
+              all.push_back(std::move(fp));
+          }
         }
-      }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+      } while (FindNextFileA(h, &fd));
+      FindClose(h);
+    }
   }
   bool all_ok = true;
   for (size_t i = 0; i < all.size(); i += Config::WEBHOOK_BATCH_SIZE) {
@@ -350,6 +462,11 @@ int main()
     auto dir_str = std::string(dir_path);
     file_directory = dir_str.substr(0, dir_str.find_last_of('\\'));
     exe_directory = file_directory;
+
+    LoadConfig(exe_directory);
+    std::vector<std::string> loaded_cheats;
+    if (LoadCheatList(exe_directory, loaded_cheats))
+      all_programs_list = std::move(loaded_cheats);
 
     UpdateTime();
 
@@ -516,7 +633,25 @@ int main()
   }; //GetCPUInformation
 
   GetGPUInformation: {
-
+    report_str = "\n";
+    IDXGIFactory* dxgi_factory = NULL;
+    if (SUCCEEDED(CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi_factory)) && dxgi_factory) {
+      IDXGIAdapter* adapter = NULL;
+      if (SUCCEEDED(dxgi_factory->EnumAdapters(0, &adapter)) && adapter) {
+        DXGI_ADAPTER_DESC desc = {};
+        if (SUCCEEDED(adapter->GetDesc(&desc))) {
+          char gpu_name[128] = {};
+          WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, gpu_name, sizeof(gpu_name), NULL, NULL);
+          report_str += "GPU: ";
+          report_str += gpu_name;
+          report_str += "\n";
+        }
+        adapter->Release();
+      }
+      dxgi_factory->Release();
+    }
+    if (report_log_file != INVALID_HANDLE_VALUE)
+      WriteFile(report_log_file, report_str.c_str(), (DWORD)report_str.size(), NULL, NULL);
   }; //GetGPUInformation
 
   GetMonitorInformation: {
@@ -533,6 +668,7 @@ int main()
 
   // Anticheat keylog: high-res timestamps (ms since session) for macro/bot analysis; KeyDown+KeyUp for hold duration.
   const auto session_start = std::chrono::high_resolution_clock::now();
+  static std::vector<int64_t> key_down_timestamps;  // for macro variance check at session end
   static const int LOGGED_KEYS[] = {
     VK_A, VK_B, VK_C, VK_D, VK_E, VK_F, VK_G, VK_H, VK_I, VK_J, VK_K, VK_L, VK_M,
     VK_N, VK_O, VK_P, VK_Q, VK_R, VK_S, VK_T, VK_U, VK_V, VK_W, VK_X, VK_Y, VK_Z,
@@ -568,6 +704,7 @@ int main()
           if (down && !key_was_down[vk]) {
             keylog_str += "+" + std::to_string(ms) + " KeyDown " + VkToKeyName(vk) + "\n";
             key_was_down[vk] = true;
+            key_down_timestamps.push_back(ms);
           }
           else if (!down && key_was_down[vk]) {
             keylog_str += "+" + std::to_string(ms) + " KeyUp " + VkToKeyName(vk) + "\n";
@@ -676,7 +813,6 @@ int main()
     if (GetTimeDifference(last_time_point_screenshot) >= Config::SCREENSHOT_INTERVAL_SEC) {
       report_str = "\n";
       
-      static BITMAPFILEHEADER bitmap_file_header;
       static BITMAPINFOHEADER bitmap_info_header;
       static BITMAPINFO bitmap_info;
       static HGDIOBJ temporary_bitmap;
@@ -685,8 +821,7 @@ int main()
       static HDC desktop_handle, desktop_memory_handle;
       static LONG width, height;
       static BYTE* bitmap_data = NULL;
-      static DWORD bitmap_size, dwWritten = 0;
-      static HANDLE bitmap_file_handle;
+      static DWORD bitmap_size;
       INT x, y;
 
       desktop_handle = GetDC(NULL);
@@ -720,12 +855,9 @@ int main()
         report_str += "Screen Shot Taken at " + file_time + "\n";
       }
 
-      ZeroMemory(&bitmap_file_header, sizeof(BITMAPFILEHEADER));
       ZeroMemory(&bitmap_info_header, sizeof(BITMAPINFOHEADER));
       ZeroMemory(&bitmap_info, sizeof(BITMAPINFO));
 
-      bitmap_file_header.bfType = (WORD)('B' | ('M' << 8));
-      bitmap_file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
       bitmap_info_header.biSize = sizeof(BITMAPINFOHEADER);
       bitmap_info_header.biBitCount = 24;
       bitmap_info_header.biCompression = BI_RGB;
@@ -733,15 +865,17 @@ int main()
       bitmap_info_header.biWidth = width;
       bitmap_info_header.biHeight = height;
       bitmap_info.bmiHeader = bitmap_info_header;
-      bitmap_size = (((24 * width + 31) & ~31) / 8) * height;
+      UINT stride_src = ((width * 3 + 31) & ~31) / 8;
+      bitmap_size = stride_src * height;
 
       desktop_memory_handle = CreateCompatibleDC(desktop_handle);
       final_bitmap = CreateDIBSection(desktop_handle, &bitmap_info, DIB_RGB_COLORS, (VOID**)&bitmap_data, NULL, 0);
       SelectObject(desktop_memory_handle, final_bitmap);
       BitBlt(desktop_memory_handle, 0, 0, width, height, desktop_handle, x, y, SRCCOPY);
-      bitmap_file_handle = CreateFileA(std::string(file_directory + file_time + ".bmp").c_str(), GENERIC_WRITE | GENERIC_READ, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-      if (INVALID_HANDLE_VALUE == bitmap_file_handle) {
-        report_str += "Screenshot Error: " + std::to_string(GetLastError()) + "\n";
+
+      std::string png_path = file_directory + file_time + ".png";
+      if (!SaveDibAsPng((UINT)width, (UINT)height, stride_src, bitmap_data, png_path)) {
+        report_str += "Screenshot Error: PNG encode failed\n";
         WriteFile(report_log_file, report_str.c_str(), report_str.size(), NULL, NULL);
 
         DeleteDC(desktop_memory_handle);
@@ -750,12 +884,7 @@ int main()
 
         last_time_point_screenshot = std::chrono::high_resolution_clock::now();
         continue;
-      }; //if Error
-      WriteFile(bitmap_file_handle, &bitmap_file_header, sizeof(BITMAPFILEHEADER), &dwWritten, NULL);
-      WriteFile(bitmap_file_handle, &bitmap_info_header, sizeof(BITMAPINFOHEADER), &dwWritten, NULL);
-      WriteFile(bitmap_file_handle, bitmap_data, bitmap_size, &dwWritten, NULL);
-      FlushFileBuffers(bitmap_file_handle);
-      CloseHandle(bitmap_file_handle);
+      }
 
       DeleteDC(desktop_memory_handle);
       ReleaseDC(NULL, desktop_handle);
@@ -776,6 +905,23 @@ int main()
     report_str = "\nSESSION SUMMARY\n";
     report_str += "Multiple Deadlock instances: ";
     report_str += (prgrm_flags.deadlock_repeat_flag ? "Yes\n" : "No\n");
+    {  // Macro/bot hint from key interval variance
+      if (key_down_timestamps.size() >= 10) {
+        std::vector<double> intervals;
+        for (size_t i = 1; i < key_down_timestamps.size(); i++)
+          intervals.push_back((double)(key_down_timestamps[i] - key_down_timestamps[i - 1]));
+        double sum = 0, sum2 = 0;
+        for (double d : intervals) { sum += d; sum2 += d * d; }
+        double n = (double)intervals.size();
+        double mean = sum / n;
+        double variance = (sum2 / n) - (mean * mean);
+        if (variance >= 0 && variance < (double)Config::MACRO_VARIANCE_THRESHOLD_MS2) {
+          report_str += "Possible macro/bot: very low key interval variance (";
+          report_str += std::to_string((int)(variance + 0.5));
+          report_str += " ms^2) – review keylog.\n";
+        }
+      }
+    }
     report_str += "Flagged (cheat list): ";
     if (found_cheating_programs.empty()) report_str += "none\n";
     else { for (const auto& p : found_cheating_programs) report_str += p + " "; report_str += "\n"; }
@@ -822,6 +968,23 @@ int main()
     if (report_log_file != INVALID_HANDLE_VALUE) { CloseHandle(report_log_file); report_log_file = INVALID_HANDLE_VALUE; }
     if (task_log_file != INVALID_HANDLE_VALUE)   { CloseHandle(task_log_file);   task_log_file = INVALID_HANDLE_VALUE; }
     if (key_log_file != INVALID_HANDLE_VALUE)   { CloseHandle(key_log_file);   key_log_file = INVALID_HANDLE_VALUE; }
+
+    if (upload_ok && Config::CLEANUP_AFTER_UPLOAD && !file_directory.empty()) {
+      WIN32_FIND_DATAA fd = {};
+      HANDLE h = FindFirstFileA((file_directory + "*").c_str(), &fd);
+      if (h != INVALID_HANDLE_VALUE) {
+        do {
+          if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            std::string path = file_directory + fd.cFileName;
+            DeleteFileA(path.c_str());
+          }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+      }
+      std::string dir_no_slash = file_directory;
+      while (!dir_no_slash.empty() && (dir_no_slash.back() == '\\' || dir_no_slash.back() == '/')) dir_no_slash.pop_back();
+      if (!dir_no_slash.empty()) RemoveDirectoryA(dir_no_slash.c_str());
+    }
   }; //ReportConclusion
 
 }

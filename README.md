@@ -1,6 +1,6 @@
 # Deadlock AC (UrnIt Anticheat)
 
-Anticheat client for **Deadlock**: logs tasks, screenshots (game window), key input (only when Deadlock is focused), and hardware info, then **uploads the session to your Discord** when the player presses **F12** to end the session.
+Anticheat client for **Deadlock**: logs tasks, PNG screenshots (game window), key input (only when Deadlock is focused), and hardware info (OS, CPU, GPU), then **uploads the session to your Discord** when the player ends the session (automatically on game exit or manually with **F12**). Supports a **config file** and **cheat list from file** (including a script to scrape current cheats from the Deadlock trading forum), **macro/bot hint** in the report, and optional **session folder cleanup** after upload.
 
 ## Requirements
 
@@ -11,50 +11,69 @@ Anticheat client for **Deadlock**: logs tasks, screenshots (game window), key in
 ## How it works
 
 - **Run** the .exe next to the game (or on the same PC). It creates a timestamped folder and writes:
-  - `REPORT.TXT` – OS, CPU, session summary, cheat/performance flags
+  - `REPORT.TXT` – OS, CPU, **GPU**, session summary, cheat/performance flags, optional **"Possible macro/bot"** line (when key interval variance is very low), and Discord upload status
   - `TASK.TXT` – process list (name, PID, session)
   - `KEY_LOG.TXT` – key down/up with timestamps (only while the "Deadlock" window is focused)
-  - `*.bmp` – screenshots (game window when found, else full screen) every 5 seconds
+  - `*.png` – screenshots (game window when found, else full screen) every 5 seconds (PNG for smaller size and faster upload)
 - **End session** (automatic or manual):
-  - **Automatic**: When the Deadlock process exits (player closes the game), the client writes the session summary, uploads to Discord, and exits. No F12 needed.
+  - **Automatic**: When the Deadlock process exits (player closes the game), the client writes the session summary, uploads to Discord in the **background** (console shows "Uploading…"), and exits. No F12 needed.
   - **Manual**: Player can still press **F12** anytime to end the session early and upload.
+- **Optional**: If `config.txt` has `CLEANUP_AFTER_UPLOAD=1`, the session folder is deleted after a successful upload so no local copy remains.
 
 No manual file upload: everything is sent automatically to **your** Discord.
 
 ## Setup (so uploads go “here” — your Discord)
 
 1. **Clone** the repo and open `UrnItAnticheat-main\UrnItAnticheat\UrnItAnticheat.sln` in Visual Studio. Select **x64** (Debug or Release) and build. The `.exe` is in `UrnItAnticheat-main\UrnItAnticheat\x64\Debug\` or `...\x64\Release\`.
-2. **Discord webhook** (required for upload):
-   - In Discord: Channel → Integrations → Webhooks → New Webhook. Copy the webhook URL.
-   - Next to the built `.exe`, create `webhook.txt` with **one line**: that URL.
-   - See `UrnItAnticheat-main\UrnItAnticheat\webhook.txt.example`.
-3. **Player ID** (optional): create `player_id.txt` next to the .exe with one line (e.g. tournament tag or Discord ID). This is included in report and Discord messages so you know whose session it is.
-4. **Cheat/performance lists**: edit `all_programs_list` in `UrnItAnticheat.cpp`: after `"cheats"` add process names to flag (e.g. `"cheat.exe"`), after `"performance"` add tools (e.g. `"msi afterburner.exe"`). Names are case-insensitive.
 
-## Config (in code)
+2. **Place these files next to the built `.exe`** (same folder as the exe):
 
-In `UrnItAnticheat.cpp`, `Config::`:
+   | File | Required? | Description |
+   |------|-----------|-------------|
+   | `webhook.txt` | **Yes** (for upload) | One line: your Discord webhook URL. See `webhook.txt.example`. |
+   | `player_id.txt` | No | One line: tournament tag or Discord ID; included in report and Discord messages. |
+   | `config.txt` | No | Overrides intervals and options (see **Config** below). Copy from `config.txt.example`. |
+   | `cheat_list.txt` | No | List of process names to flag as cheat/performance. If missing, built-in list in code is used. See **Cheat list** below. |
 
-- `TASK_SCAN_INTERVAL_SEC` – process list interval (default 3 s)
-- `SCREENSHOT_INTERVAL_SEC` – screenshot interval (default 5 s)
-- `KEYLOG_INTERVAL_SEC` – key sampling interval (default 0.05 s)
-- `WEBHOOK_BATCH_SIZE`, `WEBHOOK_RATE_LIMIT_MS`, `UPLOAD_TIMEOUT_MS` – Discord upload behavior
-- `AUTO_UPLOAD_ON_GAME_EXIT` – if `true` (default), session ends and uploads when the Deadlock process exits; set to `false` to require F12 to end and upload
-- `UPLOAD_WAIT_TIMEOUT_SEC` – max seconds to wait for Discord upload (default 30); upload runs in background, console shows "Uploading…" then exits when done or when timeout is reached
+3. **Discord webhook**: In Discord: Channel → Integrations → Webhooks → New Webhook. Copy the URL into `webhook.txt`.
+
+4. **Cheat list** (optional): Format of `cheat_list.txt`: first line `cheats`, then one process name per line (e.g. `syntheticskill.exe`), then line `performance`, then tool names. Lines starting with `#` are ignored. To **generate a list from current Deadlock cheats**, run:
+   ```bash
+   python UrnItAnticheat-main/scripts/scrape_deadlock_cheats.py
+   ```
+   This scrapes the [elitepvpers Deadlock trading](https://www.elitepvpers.com/forum/deadlock-trading/) forum and writes `UrnItAnticheat-main/UrnItAnticheat/cheat_list.txt`. Copy that file next to the exe (or use `--output` to write directly to the exe folder). If `cheat_list.txt` is missing, the built-in list in code is used.
+
+## Config (config.txt)
+
+If `config.txt` is present next to the exe, these keys are loaded (one per line, `KEY=value`); otherwise defaults apply. Copy `config.txt.example` and edit.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `TASK_SCAN_INTERVAL_SEC` | 3 | Seconds between process list scans. |
+| `SCREENSHOT_INTERVAL_SEC` | 5 | Seconds between PNG screenshots. |
+| `KEYLOG_INTERVAL_SEC` | 0.05 | Key sampling interval (seconds). |
+| `LOOP_SLEEP_MS` | 20 | Main loop sleep (ms). |
+| `AUTO_UPLOAD_ON_GAME_EXIT` | 1 | If 1/true/yes, session ends and uploads when Deadlock process exits; else F12 only. |
+| `UPLOAD_WAIT_TIMEOUT_SEC` | 30 | Max seconds to wait for Discord upload (upload runs in background; console shows "Uploading…"). |
+| `CLEANUP_AFTER_UPLOAD` | 0 | If 1/true/yes, delete the session folder after a successful upload. |
+| `MACRO_VARIANCE_THRESHOLD_MS2` | 500 | If key interval variance (ms²) is below this, report adds "Possible macro/bot" for human review. |
+
+The report includes **GPU** (via DXGI) and, when key timings show very low variance, a **macro/bot hint** line.
 
 ## “Upload it all to here”
 
-- **Anticheat → Discord**: With `webhook.txt` set, F12 uploads the session (REPORT, TASK, KEY_LOG, screenshots) to the Discord channel that owns the webhook. That’s “upload to here” for the logs.
-- **This repo**: To publish the code “here” (e.g. GitHub), clone or push this folder to your repo. Do **not** commit `webhook.txt` (keep it only on the machine where you build/distribute the exe).
+- **Anticheat → Discord**: With `webhook.txt` set, ending the session (game exit or F12) uploads the session (REPORT, TASK, KEY_LOG, PNG screenshots) to the Discord channel that owns the webhook. Upload runs in the background (max wait in config). Report gets a final line: Discord upload completed, failed, or timed out.
+- **This repo**: To publish the code “here” (e.g. GitHub), clone or push this folder to your repo. Do **not** commit `webhook.txt`, `config.txt`, or `cheat_list.txt` (keep them only where you build or distribute the exe).
 
 ## Releases (distributing the .exe)
 
-- **Downloading**: If the maintainer publishes releases, go to [Releases](https://github.com/lorddummy/deadlock-anti-cheat/releases) and download the latest `.exe`. Place `webhook.txt` (and optionally `player_id.txt`) next to it—never commit these files to the repo.
-- **Creating a release**: On GitHub, go to **Releases → Create a new release**. Choose a tag (e.g. `v1.0`), add release notes, then **attach** your built `UrnItAnticheat.exe` (from `x64\Release\` or `x64\Debug\`). Use Release build for distribution. Do not include `webhook.txt` in the upload.
+**No pre-built releases yet.** Build from source (see **Setup** above). When the maintainer publishes releases, they will appear at [Releases](https://github.com/lorddummy/deadlock-anti-cheat/releases)—then you can download the latest `.exe`, place `webhook.txt` (and optionally `player_id.txt`) next to it, and never commit those files to the repo.
+
+**To create a release:** On GitHub go to **Releases → Create a new release**. Choose a tag (e.g. `v1.0`), add release notes, then **attach** your built `UrnItAnticheat.exe` (from `x64\Release\` or `x64\Debug\`). Use Release build. Do not include `webhook.txt` in the upload.
 
 ## Privacy / data collected
 
-The client collects and sends to your Discord (on F12): Windows username, OS version, CPU info, process list, key timings only while the Deadlock window is focused, and screenshots (game window or full screen). Use only for anticheat review; inform players what is collected.
+The client collects and sends to your Discord: Windows username, OS version, CPU and **GPU** info, process list, key timings (only while the Deadlock window is focused), and PNG screenshots (game window or full screen). The report may include a **"Possible macro/bot"** line when key interval variance is very low. Use only for anticheat review; inform players what is collected.
 
 ## Tips for staff
 
@@ -62,8 +81,12 @@ The client collects and sends to your Discord (on F12): Windows username, OS ver
 - Use one webhook per tournament or tier so reports are easy to sort.
 - Some antivirus may flag the .exe (keyboard/screenshot behavior); players may need to allow or whitelist it.
 
+**Roadmap:** For current state, known issues, and next steps see the [**Wiki**](https://github.com/lorddummy/deadlock-anti-cheat/wiki).
+
 ## Summary
 
-- Intervals use **seconds** (task scan 3 s, screenshots 5 s, keylog 50 ms).
+- **Config** and **cheat list** load from `config.txt` and `cheat_list.txt` next to the exe (optional); use the Python scraper to build the cheat list from the Deadlock trading forum.
+- Intervals use **seconds** (tunable via config: task scan, screenshots, keylog).
 - Keylog and game-window screenshots only when the **Deadlock** window is focused.
-- Session ends when the **game exits** (auto-upload) or when the player presses **F12**; upload to Discord is automatic; optional player ID and cheat/performance lists as above.
+- **PNG** screenshots; **GPU** in report; **macro/bot hint** when key variance is very low.
+- Session ends when the **game exits** (auto-upload) or when the player presses **F12**; upload runs in the **background**; optional **session folder cleanup** after successful upload.

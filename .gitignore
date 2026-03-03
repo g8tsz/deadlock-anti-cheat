@@ -3,6 +3,8 @@ webhook.txt
 player_id.txt
 **/webhook.txt
 **/player_id.txt
+**/config.txt
+**/cheat_list.txt
 
 # Build outputs
 *.user
