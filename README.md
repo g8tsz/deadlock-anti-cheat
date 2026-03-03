@@ -1,4 +1,4 @@
-# Deadlock AC (UrnIt Anticheat)
+﻿# Deadlock AC (UrnIt Anticheat)
 
 Anticheat client for **Deadlock**: logs tasks, PNG screenshots (game window), key input (only when Deadlock is focused), and hardware info (OS, CPU, GPU), then **uploads the session to your Discord** when the player ends the session (automatically on game exit or manually with **F12**). Supports a **config file** and **cheat list from file** (including a script to scrape current cheats from the Deadlock trading forum), **macro/bot hint** in the report, and optional **session folder cleanup** after upload.
 
@@ -22,7 +22,7 @@ Anticheat client for **Deadlock**: logs tasks, PNG screenshots (game window), ke
 
 No manual file upload: everything is sent automatically to **your** Discord.
 
-## Setup (so uploads go “here” — your Discord)
+## Setup
 
 1. **Clone** the repo and open `UrnItAnticheat-main\UrnItAnticheat\UrnItAnticheat.sln` in Visual Studio. Select **x64** (Debug or Release) and build. The `.exe` is in `UrnItAnticheat-main\UrnItAnticheat\x64\Debug\` or `...\x64\Release\`.
 
@@ -60,16 +60,13 @@ If `config.txt` is present next to the exe, these keys are loaded (one per line,
 
 The report includes **GPU** (via DXGI) and, when key timings show very low variance, a **macro/bot hint** line.
 
-## “Upload it all to here”
+## Upload to Discord
 
-- **Anticheat → Discord**: With `webhook.txt` set, ending the session (game exit or F12) uploads the session (REPORT, TASK, KEY_LOG, PNG screenshots) to the Discord channel that owns the webhook. Upload runs in the background (max wait in config). Report gets a final line: Discord upload completed, failed, or timed out.
-- **This repo**: To publish the code “here” (e.g. GitHub), clone or push this folder to your repo. Do **not** commit `webhook.txt`, `config.txt`, or `cheat_list.txt` (keep them only where you build or distribute the exe).
+With `webhook.txt` set, ending the session (game exit or F12) uploads REPORT, TASK, KEY_LOG, and PNG screenshots to the Discord channel. Upload runs in the background (max wait from config). The report gets a final line: Discord upload completed, failed, or timed out. Do **not** commit `webhook.txt`, `config.txt`, or `cheat_list.txt`.
 
-## Releases (distributing the .exe)
+## Releases
 
-**No pre-built releases yet.** Build from source (see **Setup** above). When the maintainer publishes releases, they will appear at [Releases](https://github.com/lorddummy/deadlock-anti-cheat/releases)—then you can download the latest `.exe`, place `webhook.txt` (and optionally `player_id.txt`) next to it, and never commit those files to the repo.
-
-**To create a release:** On GitHub go to **Releases → Create a new release**. Choose a tag (e.g. `v1.0`), add release notes, then **attach** your built `UrnItAnticheat.exe` (from `x64\Release\` or `x64\Debug\`). Use Release build. Do not include `webhook.txt` in the upload.
+No pre-built releases yet. Build from source (see **Setup**). When releases are published, they will appear at [Releases](https://github.com/lorddummy/deadlock-anti-cheat/releases). To create a release: **Releases → Create a new release**, choose a tag (e.g. `v1.0`), add notes, attach the built `UrnItAnticheat.exe` from `x64\Release\` or `x64\Debug\`. Do not include `webhook.txt`.
 
 ## Privacy / data collected
 
@@ -80,8 +77,6 @@ The client collects and sends to your Discord: Windows username, OS version, CPU
 - Use a **private** Discord channel for the webhook so only staff see reports.
 - Use one webhook per tournament or tier so reports are easy to sort.
 - Some antivirus may flag the .exe (keyboard/screenshot behavior); players may need to allow or whitelist it.
-
-**Roadmap:** For current state, known issues, and next steps see the [**Wiki**](https://github.com/lorddummy/deadlock-anti-cheat/wiki).
 
 ## Summary
 
