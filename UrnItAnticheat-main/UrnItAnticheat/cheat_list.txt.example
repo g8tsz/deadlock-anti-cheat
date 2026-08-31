@@ -1,0 +1,8 @@
+# Cheat list: one entry per line. Load from cheat_list.txt next to the exe.
+# Format: first line "cheats", then process names (e.g. cheat.exe), then "performance", then tool names.
+# Run scripts/scrape_deadlock_cheats.py to generate from elitepvpers forum (or edit manually).
+
+cheats
+# example_cheat.exe
+performance
+# msi afterburner.exe
